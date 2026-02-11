@@ -48,7 +48,7 @@ public class MetricsTimeStorage<TKey>
             
             _stringBuilderSerializer.Invoke(sb, item.Key);
             
-            sb.Append("\" duration=");
+            sb.Append(" duration=");
             sb.Append((float)item.Value);
             sb.Append(" ");
             sb.Append(epochNow);

@@ -102,6 +102,8 @@ namespace RustServerMetrics
 
         IEnumerator SendRequest()
         {
+
+
             var request = new UnityWebRequest(_uri, UnityWebRequest.kHttpVerbPOST)
             {
                 uploadHandler = new UploadHandlerRaw(_data),
@@ -110,10 +112,45 @@ namespace RustServerMetrics
                 useHttpContinue = true,
                 redirectLimit = 5
             };
+
+            if (_metricsLogger.Configuration.skipTlsVerification)
+            {
+                request.certificateHandler = new AcceptAllCertificates();
+                request.disposeCertificateHandlerOnDispose = true;
+            }
+
+            // InfluxDB 2.x expects line protocol as plain text and uses a Token for authentication
+            request.SetRequestHeader("Content-Type", "text/plain; charset=utf-8");
+
+            var token = _metricsLogger.Configuration?.databasePassword;
+            if (!string.IsNullOrEmpty(token))
+            {
+                request.SetRequestHeader("Authorization", $"Token {token}");
+            }
+
+            if (_metricsLogger.Configuration?.debugLogging == true)
+            {
+                var body = Encoding.UTF8.GetString(_data);
+                var firstLines = body.Split('\n');
+                var preview = string.Join("\\n", firstLines.Length > 5 ? firstLines[..5] : firstLines);
+                Debug.Log($"[ServerMetrics] Sending metrics to Influx:\n{preview}");
+            }
+
             yield return request.SendWebRequest();
+
+            if (_metricsLogger.Configuration?.debugLogging == true)
+            {
+                Debug.Log($"[ServerMetrics] HTTP Code: {request.responseCode}");
+                Debug.Log($"[ServerMetrics] Influx Response: {request.downloadHandler.text}");
+            }
 
             if (request.isNetworkError)
             {
+                if (_metricsLogger.Configuration?.debugLogging == true)
+                {
+                    Debug.LogError($"[ServerMetrics] Network error detail: {request.error}");
+                }
+
                 if (_attempt >= 2)
                 {
                     if (_throttleNetworkErrorMessages)

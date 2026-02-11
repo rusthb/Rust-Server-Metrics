@@ -1,3 +1,4 @@
+#if false
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -77,3 +78,5 @@ internal static class ServerMgr_Metrics_Patches
     }
 }
 
+
+#endif

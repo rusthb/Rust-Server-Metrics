@@ -2,81 +2,105 @@
 using RustServerMetrics.HarmonyPatches.Utility;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
 using UnityEngine;
 
-namespace RustServerMetrics.HarmonyPatches.Delayed;
-
-[DelayedHarmonyPatch]
-[HarmonyPatch]
-internal class RPCServer_Attribute_Method_Patch
+namespace RustServerMetrics.HarmonyPatches.Delayed
 {
-    [HarmonyPrepare]
-    public static bool Prepare()
+    /// <summary>
+    /// Times all methods in Assembly-CSharp that have an RPC_Server-like attribute.
+    /// Much safer reflection than the original implementation:
+    ///  - Only scans Assembly-CSharp (BasePlayer assembly)
+    ///  - Uses CustomAttributes (metadata) instead of constructing attribute instances
+    ///  - Wraps reflection in try/catch
+    /// </summary>
+    [DelayedHarmonyPatch]
+    [HarmonyPatch]
+    internal static class RPCServer_Attribute_Method_Patch
     {
-        if (RustServerMetricsLoader.__serverStarted)
+        // Methods we must not patch because they run during file/storage init
+        private static readonly string[] ForbiddenRpcDeclaringTypes =
         {
-            return true;
-        }
-            
-        Debug.Log("Note: Cannot patch RPCServer_Attribute_Method_Patch yet. We will patch it upon server start.");
-        return false;
-    }
-        
-    [HarmonyTargetMethods]
-    public static IEnumerable<MethodBase> TargetMethods(Harmony harmonyInstance)
-    {
-        var baseNetworkableType = typeof(BaseNetworkable);
-        var baseNetworkableAssembly = baseNetworkableType.Assembly;
-        var typesToScan = new Stack<Type>(baseNetworkableAssembly.GetTypes());
+    "BaseEntity",          // SV_RequestFile lives here
+    "FileStorage",         // Anything that touches server/<identity>/sv.files.*.db
+    "ServerMgr",           // Not needed but safe to exclude
+    "Bootstrap"            // Avoid Rust bootstrap RPCs
+};
 
-        while (typesToScan.TryPop(out var type))
+        [HarmonyTargetMethods]
+        public static IEnumerable<MethodBase> TargetMethods(Harmony harmonyInstance)
         {
-            foreach (var subType in type.GetNestedTypes())
+            Assembly assemblyCSharp;
+
+            try
             {
-                typesToScan.Push(subType);
+                assemblyCSharp = typeof(global::BasePlayer).Assembly;
             }
-                
-            foreach (var method in type.GetMethods())
+            catch
             {
-                if (method.DeclaringType == method.ReflectedType && method.GetCustomAttribute<BaseEntity.RPC_Server>() != null)
+                yield break;
+            }
+
+            Type[] allTypes;
+            try
+            {
+                allTypes = assemblyCSharp.GetTypes();
+            }
+            catch (ReflectionTypeLoadException rtl)
+            {
+                allTypes = rtl.Types;
+            }
+
+            foreach (var type in allTypes)
+            {
+                if (type == null) continue;
+
+                // Skip dangerous classes
+                if (Array.Exists(ForbiddenRpcDeclaringTypes,
+                    forbidden => type.FullName != null && type.FullName.Contains(forbidden)))
+                    continue;
+
+                MethodInfo[] methods;
+                try
                 {
+                    methods = type.GetMethods(
+                        BindingFlags.Public |
+                        BindingFlags.NonPublic |
+                        BindingFlags.Instance |
+                        BindingFlags.Static |
+                        BindingFlags.DeclaredOnly);
+                }
+                catch { continue; }
+
+                foreach (var method in methods)
+                {
+                    if (method == null) continue;
+
+                    bool hasRpc = false;
+
+                    try
+                    {
+                        foreach (var cad in method.CustomAttributes)
+                        {
+                            if (cad.AttributeType.Name.Contains("RPC_Server"))
+                            {
+                                hasRpc = true;
+                                break;
+                            }
+                        }
+                    }
+                    catch { continue; }
+
+                    if (!hasRpc)
+                        continue;
+
+                    // Also skip explicit problem method: SV_RequestFile
+                    if (method.Name.Contains("SV_RequestFile"))
+                        continue;
+
                     yield return method;
                 }
             }
         }
-    } 
-        
-    [HarmonyTranspiler]
-    public static IEnumerable<CodeInstruction> Transpile(IEnumerable<CodeInstruction> originalInstructions, MethodBase methodBase, ILGenerator ilGenerator)
-    {
-        var ret = originalInstructions.ToList();
-        var local = ilGenerator.DeclareLocal(typeof(DateTime));
-            
-        ret.InsertRange(0, new CodeInstruction []
-        { 
-            new (OpCodes.Call, AccessTools.Property(typeof(DateTime), nameof(DateTime.UtcNow)).GetMethod),
-            new (OpCodes.Stloc, local)
-        });
-
-        return Helpers.Postfix(
-            ret,
-            CustomPostfix, 
-            new CodeInstruction(OpCodes.Ldstr, $"{methodBase.DeclaringType?.Name}.{methodBase.Name}"),
-            new CodeInstruction(OpCodes.Ldloc, local));
-    }
-         
-
-    public static void CustomPostfix(string methodName, DateTime __state)
-    {
-        if (MetricsLogger.Instance == null)
-        {
-            return;
-        }
-            
-        var duration = DateTime.UtcNow - __state;
-        MetricsLogger.Instance.ServerRpcCalls.LogTime(methodName, duration.TotalMilliseconds);
     }
 }

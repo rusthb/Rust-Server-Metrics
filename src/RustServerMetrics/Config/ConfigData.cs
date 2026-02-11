@@ -4,26 +4,34 @@ namespace RustServerMetrics.Config
 {
     class ConfigData
     {
-        public const string DEFAULT_INFLUX_DB_URL = "http://exampledb.com";
-        public const string DEFAULT_INFLUX_DB_NAME = "CHANGEME_rust_server_example";
-        public const string DEFAULT_INFLUX_DB_USER = "admin";
-        public const string DEFAULT_INFLUX_DB_PASSWORD = "adminadmin";
-        public const string DEFAULT_SERVER_TAG = "CHANGEME-01";
+        // InfluxDB 2.x defaults (you MUST change these in the config file)
+        public const string DEFAULT_INFLUX_DB_URL      = "http://127.0.0.1:8086";
+        public const string DEFAULT_INFLUX_ORG         = "CHANGEME_org";
+        public const string DEFAULT_INFLUX_BUCKET      = "CHANGEME_bucket";
+        public const string DEFAULT_INFLUX_TOKEN       = "CHANGEME_token";
+        public const string DEFAULT_SERVER_TAG         = "CHANGEME-01";
 
         [JsonProperty(PropertyName = "Enabled")]
         public bool enabled = false;
 
-        [JsonProperty(PropertyName = "Influx Database Url")]
+        // Base URL of your InfluxDB 2.x instance, e.g. "http://127.0.0.1:8086"
+        [JsonProperty(PropertyName = "Influx URL")]
         public string databaseUrl = DEFAULT_INFLUX_DB_URL;
 
-        [JsonProperty(PropertyName = "Influx Database Name")]
-        public string databaseName = DEFAULT_INFLUX_DB_NAME;
+        [JsonProperty(PropertyName = "Skip TLS Verification")]
+        public bool skipTlsVerification = true;
 
-        [JsonProperty(PropertyName = "Influx Database User")]
-        public string databaseUser = DEFAULT_INFLUX_DB_USER;
+        // Influx 2.x organisation name or ID
+        [JsonProperty(PropertyName = "Influx Organisation")]
+        public string databaseUser = DEFAULT_INFLUX_ORG;
 
-        [JsonProperty(PropertyName = "Influx Database Password")]
-        public string databasePassword = DEFAULT_INFLUX_DB_PASSWORD;
+        // Influx 2.x bucket name
+        [JsonProperty(PropertyName = "Influx Bucket")]
+        public string databaseName = DEFAULT_INFLUX_BUCKET;
+
+        // Influx 2.x API token (with write access to the bucket)
+        [JsonProperty(PropertyName = "Influx Token")]
+        public string databasePassword = DEFAULT_INFLUX_TOKEN;
 
         [JsonProperty(PropertyName = "Server Tag")]
         public string serverTag = DEFAULT_SERVER_TAG;
@@ -34,7 +42,7 @@ namespace RustServerMetrics.Config
         [JsonProperty(PropertyName = "Amount of metrics to submit in each request")]
         public ushort batchSize = 1000;
 
-        [JsonProperty(PropertyName = "Gather Player Averages (Client FPS, Client Latency, Player FPS, Player Memory, Player Latency, Player Packet Loss)")]
+        [JsonProperty(PropertyName = "Gather Player Averages (Client FPS, Player Memory, Player Latency, Player Packet Loss)")]
         public bool gatherPlayerMetrics = true;
     }
 }

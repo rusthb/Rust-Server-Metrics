@@ -43,7 +43,7 @@ namespace RustServerMetrics
         public readonly MetricsTimeStorage<string> TimeWarnings = new("timewarnings", LogMethodName);
         public readonly MetricsTimeStorage<string> ServerConsoleCommands = new("console_commands", (builder, command) =>
         {
-            builder.Append(",command=\"");
+            builder.Append(",command=");
             builder.Append(command);
         });
 
@@ -64,8 +64,15 @@ namespace RustServerMetrics
                 if (_baseUri != null)
                     return _baseUri;
 
-                var uri = new Uri(Configuration.databaseUrl);
-                _baseUri = new Uri(uri, $"/write?db={Configuration.databaseName}&precision=ms&u={Configuration.databaseUser}&p={Configuration.databasePassword}");
+                if (Configuration == null)
+                    throw new InvalidOperationException("[ServerMetrics]: Configuration has not been loaded");
+
+                // InfluxDB 2.x uses /api/v2/write with org, bucket and precision
+                var rootUri = new Uri(Configuration.databaseUrl);
+                var org = Uri.EscapeDataString(Configuration.databaseUser);
+                var bucket = Uri.EscapeDataString(Configuration.databaseName);
+
+                _baseUri = new Uri(rootUri, $"/api/v2/write?org={org}&bucket={bucket}&precision=ms");
                 return _baseUri;
             }
         }
@@ -84,10 +91,10 @@ namespace RustServerMetrics
             Debug.Log($"[ServerMetrics]: Applying Startup Patches");
             var assembly = GetType().Assembly;
 
-            var harmonyInstance = HarmonyLoader.loadedMods.FirstOrDefault(x => x.Assembly == assembly)?.Harmony.harmonyObject;
+            var harmonyInstance = RustServerMetricsLoader.__harmonyInstance;
             if (harmonyInstance == null)
             {
-                RustServerMetricsLoader.__harmonyInstance ??= new Harmony("RustServerMetrics" + "PATCH");
+                RustServerMetricsLoader.__harmonyInstance = new Harmony("RustServerMetrics" + "PATCH");
                 harmonyInstance = RustServerMetricsLoader.__harmonyInstance;
             }
 
@@ -101,7 +108,7 @@ namespace RustServerMetrics
             }
         }
 
-        public override void Awake()
+        protected override void Awake()
         {
             base.Awake();
             _reportUploader = gameObject.AddComponent<ReportUploader>();
@@ -433,20 +440,20 @@ namespace RustServerMetrics
 
         private static void LogMethodInfo(StringBuilder builder, MethodInfo info)
         {
-            builder.Append(",behaviour=\"");
+            builder.Append(",behaviour=");
             builder.Append(info.DeclaringType?.Name);
-            builder.Append("\",method=\"");
+            builder.Append(",method=");
             builder.Append(info.Name);
         }
 
         private static void LogMethodName(StringBuilder builder, string info)
         {
-            builder.Append(",behaviour=\"");
+            builder.Append(",behaviour=");
 
             foreach (var cursor in info)
             {
                 if (cursor == '.')
-                    builder.Append("\",method=\"");
+                    builder.Append(",method=");
                 else
                     builder.Append(cursor);
             }
@@ -484,7 +491,6 @@ namespace RustServerMetrics
 
             // Would be nice if this had a public setter, or better yet, a register command helper
             // update: now it does
-            ConsoleSystem.Index.All = ConsoleSystem.Index.All.Concat(new[] { reloadCfgCommand, statusCommand }).ToArray();
         }
 
         void StatusCommand(ConsoleSystem.Arg arg)
@@ -557,7 +563,7 @@ namespace RustServerMetrics
                 valid = false;
             }
 
-            if (Configuration.databaseName == ConfigData.DEFAULT_INFLUX_DB_NAME)
+            if (Configuration.databaseName == ConfigData.DEFAULT_INFLUX_BUCKET)
             {
                 Debug.LogError("[ServerMetrics]: Default database name detected in configuration, loading aborted");
                 valid = false;
@@ -576,23 +582,41 @@ namespace RustServerMetrics
         {
             try
             {
-                var configStr = File.ReadAllText(CONFIGURATION_PATH);
-                Configuration = JsonConvert.DeserializeObject<ConfigData>(configStr);
-                if (Configuration == null) Configuration = new ConfigData();
-                var uri = new Uri(Configuration.databaseUrl);
-                _baseUri = new Uri(uri, $"/write?db={Configuration.databaseName}&precision=ms&u={Configuration.databaseUser}&p={Configuration.databasePassword}");
-            }
-            catch
-            {
-                Debug.LogError("[ServerMetrics]: The configuration seems to be missing or malformed. Defaults will be loaded.");
-                Configuration = new ConfigData();
-
                 if (File.Exists(CONFIGURATION_PATH))
                 {
-                    return;
+                    var configStr = File.ReadAllText(CONFIGURATION_PATH);
+                    Configuration = JsonConvert.DeserializeObject<ConfigData>(configStr);
+                }
+
+                if (Configuration == null)
+                {
+                    Configuration = new ConfigData();
+                }
+
+                // Clear cached uri so it will be rebuilt with the (possibly new) configuration
+                _baseUri = null;
+
+                // Ensure configuration file exists on disk
+                SaveConfiguration();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError("[ServerMetrics]: The configuration file seems to be missing or malformed. Defaults will be loaded.");
+                Debug.LogException(ex);
+
+                Configuration = new ConfigData();
+                _baseUri = null;
+
+                try
+                {
+                    SaveConfiguration();
+                }
+                catch (Exception ex2)
+                {
+                    Debug.LogError("[ServerMetrics]: Failed to write configuration file");
+                    Debug.LogException(ex2);
                 }
             }
-            SaveConfiguration();
         }
 
         void SaveConfiguration()

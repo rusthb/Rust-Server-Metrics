@@ -1,3 +1,4 @@
+#if false
 ﻿using HarmonyLib;
 using RustServerMetrics.HarmonyPatches.Utility;
 using System;
@@ -156,3 +157,5 @@ namespace RustServerMetrics.HarmonyPatches.Delayed
         }
     }
 }
+
+#endif

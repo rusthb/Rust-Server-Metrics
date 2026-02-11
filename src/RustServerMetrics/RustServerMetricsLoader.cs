@@ -2,8 +2,14 @@
 using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.Networking;
 
 namespace RustServerMetrics;
+
+internal sealed class AcceptAllCertificates : CertificateHandler
+{
+    protected override bool ValidateCertificate(byte[] certificateData) => true;
+}
 
 public class RustServerMetricsLoader : IHarmonyModHooks
 {
@@ -14,9 +20,6 @@ public class RustServerMetricsLoader : IHarmonyModHooks
     
     public void OnLoaded(OnHarmonyModLoadedArgs args)
     {
-        if (!Bootstrap.bootstrapInitRun)
-            return;
-        
         MetricsLogger.Initialize();
             
         if (MetricsLogger.Instance != null)
