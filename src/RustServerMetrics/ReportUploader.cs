@@ -102,92 +102,92 @@ namespace RustServerMetrics
 
         IEnumerator SendRequest()
         {
+            UnityWebRequest request = null;
 
-
-            var request = new UnityWebRequest(_uri, UnityWebRequest.kHttpVerbPOST)
+            try
             {
-                uploadHandler = new UploadHandlerRaw(_data),
-                downloadHandler = new DownloadHandlerBuffer(),
-                timeout = 15,
-                useHttpContinue = true,
-                redirectLimit = 5
-            };
-
-            if (_metricsLogger.Configuration.skipTlsVerification)
-            {
-                request.certificateHandler = new AcceptAllCertificates();
-                request.disposeCertificateHandlerOnDispose = true;
-            }
-
-            // InfluxDB 2.x expects line protocol as plain text and uses a Token for authentication
-            request.SetRequestHeader("Content-Type", "text/plain; charset=utf-8");
-
-            var token = _metricsLogger.Configuration?.databasePassword;
-            if (!string.IsNullOrEmpty(token))
-            {
-                request.SetRequestHeader("Authorization", $"Token {token}");
-            }
-
-            if (_metricsLogger.Configuration?.debugLogging == true)
-            {
-                var body = Encoding.UTF8.GetString(_data);
-                var firstLines = body.Split('\n');
-                var preview = string.Join("\\n", firstLines.Length > 5 ? firstLines[..5] : firstLines);
-                Debug.Log($"[ServerMetrics] Sending metrics to Influx:\n{preview}");
-            }
-
-            yield return request.SendWebRequest();
-
-            if (_metricsLogger.Configuration?.debugLogging == true)
-            {
-                Debug.Log($"[ServerMetrics] HTTP Code: {request.responseCode}");
-                Debug.Log($"[ServerMetrics] Influx Response: {request.downloadHandler.text}");
-            }
-
-            if (request.isNetworkError)
-            {
-                if (_metricsLogger.Configuration?.debugLogging == true)
+                request = new UnityWebRequest(_uri, UnityWebRequest.kHttpVerbPOST)
                 {
-                    Debug.LogError($"[ServerMetrics] Network error detail: {request.error}");
+                    uploadHandler = new UploadHandlerRaw(_data),
+                    downloadHandler = new DownloadHandlerBuffer(),
+                    timeout = 15,
+                    useHttpContinue = false,   // IMPORTANT
+                    redirectLimit = 0,         // avoid proxy redirect weirdness
+                    chunkedTransfer = false    // IMPORTANT
+                };
+
+                if (_metricsLogger.Configuration.skipTlsVerification)
+                {
+                    request.certificateHandler = new AcceptAllCertificates();
+                    request.disposeCertificateHandlerOnDispose = true;
                 }
 
-                if (_attempt >= 2)
+                request.SetRequestHeader("Content-Type", "text/plain; charset=utf-8");
+                request.SetRequestHeader("Accept", "application/json");
+
+                var token = _metricsLogger.Configuration?.databasePassword;
+                if (!string.IsNullOrEmpty(token))
+                    request.SetRequestHeader("Authorization", $"Token {token}");
+
+                if (_metricsLogger.Configuration?.debugLogging == true)
                 {
-                    if (_throttleNetworkErrorMessages)
+                    Debug.Log($"[ServerMetrics] POST {_uri} tlsBypass={_metricsLogger.Configuration.skipTlsVerification} certHandler={(request.certificateHandler != null)} bytes={_data?.Length ?? 0}");
+                    var body = Encoding.UTF8.GetString(_data);
+                    var lines = body.Split('\n');
+                    var preview = string.Join("\\n", lines.Length > 5 ? lines[..5] : lines);
+                    Debug.Log($"[ServerMetrics] Sending metrics to Influx:\n{preview}");
+                }
+
+                yield return request.SendWebRequest();
+
+                if (_metricsLogger.Configuration?.debugLogging == true)
+                {
+                    Debug.Log($"[ServerMetrics] result={request.result} HTTP Code: {request.responseCode}");
+                    Debug.Log($"[ServerMetrics] error='{request.error}'");
+                    Debug.Log($"[ServerMetrics] Influx Response: {request.downloadHandler.text}");
+                }
+
+                // Modern handling
+                if (request.result == UnityWebRequest.Result.ConnectionError ||
+                    request.result == UnityWebRequest.Result.DataProcessingError)
+                {
+                    if (_attempt >= 2)
                     {
-                        _accumulatedNetworkErrors += 1;
+                        if (_throttleNetworkErrorMessages) _accumulatedNetworkErrors++;
+                        else
+                        {
+                            Debug.LogError("Two consecutive network failures occurred while submitting a batch of metrics");
+                            InvokeHandler.Invoke(this, _notifySubsequentNetworkFailuresAction, 5);
+                            _throttleNetworkErrorMessages = true;
+                        }
+                        yield break;
                     }
-                    else
-                    {
-                        Debug.LogError($"Two consecutive network failures occurred while submitting a batch of metrics");
-                        InvokeHandler.Invoke(this, _notifySubsequentNetworkFailuresAction, 5);
-                        _throttleNetworkErrorMessages = true;
-                    }
+
+                    _attempt++;
+                    yield return SendRequest();
                     yield break;
                 }
 
-                _attempt++;
-                yield return SendRequest();
-                yield break;
+                if (request.result == UnityWebRequest.Result.ProtocolError)
+                {
+                    if (_throttleHttpErrorMessages) _accumulatedHttpErrors++;
+                    else
+                    {
+                        Debug.LogError($"A HTTP error occurred while submitting batch of metrics: {request.responseCode} {request.error}");
+                        if (_metricsLogger.Configuration?.debugLogging == true)
+                            Debug.LogError(request.downloadHandler.text);
+                        InvokeHandler.Invoke(this, _notifySubsequentHttpFailuresAction, 5);
+                        _throttleHttpErrorMessages = true;
+                    }
+                    yield break;
+                }
             }
-
-            if (request.isHttpError)
+            finally
             {
-                if (_throttleHttpErrorMessages)
-                {
-                    _accumulatedHttpErrors += 1;
-                }
-                else
-                {
-                    Debug.LogError($"A HTTP error occurred while submitting batch of metrics: {request.error}");
-                    if (_metricsLogger.Configuration?.debugLogging == true) Debug.LogError(request.downloadHandler.text);
-                    InvokeHandler.Invoke(this, _notifySubsequentHttpFailuresAction, 5);
-                    _throttleHttpErrorMessages = true;
-                }
-
-                yield break;
+                request?.Dispose();
             }
         }
+
 
         void NotifySubsequentNetworkFailures()
         {
